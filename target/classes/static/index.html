@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CollabCode Interface</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Dependencies for STOMP / WebSockets -->
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+
+    <!-- Monaco Editor AMD -->
+    <script>var require = { paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs' } };</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs/loader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs/editor/editor.main.nls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs/editor/editor.main.js"></script>
+    
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="navbar glass-effect">
+            <div class="logo">
+                <div class="logo-icon"></div>
+                <h1>Collab<span>Code</span></h1>
+            </div>
+            
+            <div class="room-controls">
+                <button id="create-room-btn" class="btn btn-primary" style="background-color: var(--success); color: white;">Create Room</button>
+                <div style="width: 1px; height: 30px; background-color: var(--border-color); margin: 0 5px;"></div>
+                <input type="text" id="room-input" placeholder="Room ID" />
+                <button id="join-btn" class="btn btn-primary">Join</button>
+            </div>
+            
+            <div class="status-indicator">
+                <span id="conn-status" class="dot disconnected"></span>
+                <span id="conn-text">Disconnected</span>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Left Panel (Video / Instructions) -->
+            <aside class="sidebar side-panel glass-effect">
+                <div class="panel-header">
+                    <h2>Video Call <span class="badge">Beta</span></h2>
+                    <button id="start-call-btn" class="btn btn-primary" style="padding: 0.2rem 0.6rem; font-size: 0.8rem; display: none;">Start Call</button>
+                </div>
+                <div class="video-container">
+                    <video id="remoteVideo" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;"></video>
+                    <video id="localVideo" autoplay playsinline muted style="width: 80px; height: 100px; position: absolute; bottom: 10px; right: 10px; object-fit: cover; border-radius: 6px; border: 2px solid var(--accent-color); box-shadow: 0 0 10px rgba(0,0,0,0.5); z-index: 10;"></video>
+                    <div id="video-placeholder" class="video-placeholder rounded-neon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                        </svg>
+                        <p>Join a room to Call</p>
+                    </div>
+                </div>
+
+                <div class="problem-statement">
+                    <h3 id="problem-title">Loading Problem...</h3>
+                    <p id="problem-desc">Connecting to database...</p>
+                    <div class="tags">
+                        <span class="tag" id="problem-diff">Wait</span>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Center/Right Area (Editor and Terminal) -->
+            <section class="workspace">
+                <div class="editor-section glass-effect" style="display: flex; flex-direction: column;">
+                    <!-- Top Window Tabs -->
+                    <div class="panel-header tab-header" style="justify-content: flex-start; gap: 1rem; padding-bottom: 0;">
+                        <div class="tab active" id="tab-code">Code Editor</div>
+                        <div class="tab" id="tab-draw">Whiteboard <span class="badge" style="background: var(--accent-hover);">Live</span></div>
+                    </div>
+                    
+                    <!-- Editor Toolbar -->
+                    <div class="panel-header" id="code-toolbar" style="border-top: none;">
+                        <div class="language-selector">
+                            <select id="language-select">
+                                <option value="python">Python 3</option>
+                                <option value="java">Java 17</option>
+                            </select>
+                        </div>
+                        <div class="actions">
+                            <button id="run-btn" class="btn btn-run">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                                Run Code
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Whiteboard Toolbar (Hidden by default) -->
+                    <div class="panel-header" id="draw-toolbar" style="border-top: none; display: none;">
+                        <input type="color" id="draw-color" value="#00ffcc" title="Brush Color" style="height: 30px; border: none; background: none; cursor: pointer; padding: 0;">
+                        <button id="clear-board-btn" class="btn btn-primary" style="background-color: var(--error);">Clear Board</button>
+                    </div>
+
+                    <div id="monaco-container" style="flex: 1;"></div>
+                    <canvas id="whiteboard" style="display: none; width: 100%; height: 100%; cursor: crosshair; touch-action: none; background: rgba(0,0,0,0.2); border-radius: 8px; margin: 0 10px 10px 10px;"></canvas>
+                </div>
+
+                <div class="terminal-section glass-effect">
+                    <div class="panel-header tab-header">
+                        <div class="tab active">Output</div>
+                        <div class="tab">AI Feedback</div>
+                        
+                        <div class="exec-stats" id="exec-stats" style="display:none;">
+                            Time: <span id="exec-time">0</span>ms
+                        </div>
+                    </div>
+                    <div class="terminal-content">
+                        <pre id="output-area" class="output-text">Ready. Join a room and run your code.</pre>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
