@@ -18,7 +18,22 @@ let iceCandidateQueue = [];
 const servers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        {
+            urls: "turn:openrelay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        },
+        {
+            urls: "turn:openrelay.metered.ca:443",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        },
+        {
+            urls: "turn:openrelay.metered.ca:443?transport=tcp",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        }
     ]
 };
 
@@ -39,6 +54,9 @@ const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 const startCallBtn = document.getElementById('start-call-btn');
 const videoPlaceholder = document.getElementById('video-placeholder');
+const callControls = document.getElementById('call-controls');
+const toggleMicBtn = document.getElementById('toggle-mic-btn');
+const toggleCamBtn = document.getElementById('toggle-cam-btn');
 
 // Whiteboard Elements
 const canvas = document.getElementById('whiteboard');
@@ -206,6 +224,8 @@ function disconnectCall() {
         localStream = null;
     }
     localVideo.srcObject = null;
+    localVideo.style.display = 'none';
+    callControls.style.display = 'none';
     remoteVideo.srcObject = null;
     videoPlaceholder.style.display = 'flex';
     videoPlaceholder.querySelector('p').textContent = "Join a room to Call";
@@ -299,6 +319,22 @@ async function setupPeerConnection() {
         if (event.streams && event.streams[0]) {
             remoteVideo.srcObject = event.streams[0];
             videoPlaceholder.style.display = 'none';
+
+            // Catch strict Browser Autoplay Policies (Chrome/Mobile Safari) blocking the remote video
+            setTimeout(() => {
+                remoteVideo.play().catch(e => {
+                    console.warn("🔐 Browser blocked background Autoplay. Waiting for user interaction.", e);
+                    videoPlaceholder.style.display = 'flex';
+                    videoPlaceholder.querySelector('p').innerHTML = "🔒 <b>Browser Secured</b><br>Click anywhere on the screen to view remote video!";
+                    
+                    const unblockPlay = () => {
+                        remoteVideo.play().then(() => {
+                            videoPlaceholder.style.display = 'none';
+                        }).catch(err => console.log('Still blocked', err));
+                    };
+                    document.body.addEventListener('click', unblockPlay, { once: true });
+                });
+            }, 100);
         }
     };
 
@@ -324,6 +360,8 @@ async function startVideoCall() {
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             localVideo.srcObject = localStream;
+            localVideo.style.display = 'block';
+            callControls.style.display = 'flex';
         } catch (mediaErr) {
             console.warn("Could not access camera/mic (starting receive-only):", mediaErr);
         }
@@ -346,10 +384,17 @@ async function startVideoCall() {
 }
 
 async function handleReceiveOffer(offer) {
+    if (peerConnection) {
+        console.warn("Glare: Received offer but we already have a peerConnection active. Ignoring to prevent crash.");
+        return;
+    }
+    
     if (!peerConnection) {
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             localVideo.srcObject = localStream;
+            localVideo.style.display = 'block';
+            callControls.style.display = 'flex';
         } catch(mediaErr) {
             console.warn("No camera/mic available. Joining receive-only.");
         }
@@ -386,6 +431,26 @@ async function handleReceiveIceCandidate(candidate) {
 }
 
 // ============== UI Listeners ==============
+
+let micEnabled = true;
+let camEnabled = true;
+
+toggleMicBtn.addEventListener('click', () => {
+    if (localStream && localStream.getAudioTracks().length > 0) {
+        micEnabled = !micEnabled;
+        localStream.getAudioTracks()[0].enabled = micEnabled;
+        toggleMicBtn.style.background = micEnabled ? 'rgba(13, 17, 23, 0.8)' : 'var(--error)';
+    }
+});
+
+toggleCamBtn.addEventListener('click', () => {
+    if (localStream && localStream.getVideoTracks().length > 0) {
+        camEnabled = !camEnabled;
+        localStream.getVideoTracks()[0].enabled = camEnabled;
+        toggleCamBtn.style.background = camEnabled ? 'rgba(13, 17, 23, 0.8)' : 'var(--error)';
+        localVideo.style.opacity = camEnabled ? '1' : '0.2';
+    }
+});
 
 tabCode.addEventListener('click', () => {
     tabCode.classList.add('active'); tabDraw.classList.remove('active');
