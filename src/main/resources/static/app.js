@@ -18,11 +18,10 @@ let iceCandidateQueue = [];
 const servers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' }
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
     ]
 };
 
@@ -246,6 +245,8 @@ function connect(roomId) {
         connText.textContent = `Connected (${roomId})`;
         startCallBtn.style.display = 'inline-block'; // Show Call button
         
+        sendStompMessage({ type: 'JOINED' }); // Announce our presence
+        
         stompClient.subscribe(`/topic/room/${roomId}`, async function (message) {
             const payload = JSON.parse(message.body);
             
@@ -279,6 +280,17 @@ function connect(roomId) {
                 );
             } else if (payload.type === 'CLEAR') {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+            } else if (payload.type === 'JOINED') {
+                if (peerConnection && startCallBtn.textContent === 'Call Active') {
+                    console.log("New peer joined. Sending offer...");
+                    try {
+                        const offer = await peerConnection.createOffer();
+                        await peerConnection.setLocalDescription(offer);
+                        sendStompMessage({ type: 'OFFER', rtcPayload: offer });
+                    } catch (e) {
+                         console.error("Failed to re-offer: ", e);
+                    }
+                }
             } else if (payload.type === 'OFFER') {
                 await handleReceiveOffer(payload.rtcPayload, payload.senderId);
             } else if (payload.type === 'ANSWER') {
@@ -382,15 +394,17 @@ async function startVideoCall() {
 
 async function handleReceiveOffer(offer, senderId) {
     if (peerConnection) {
-        if (clientId < senderId) {
-            console.log("Glare: Yielding to remote offer. Recreating PC.");
-            peerConnection.close();
-            peerConnection = null;
-            await setupPeerConnection();
-        } else {
-            console.warn("Glare: Ignoring remote offer, waiting for them to yield.");
+        const polite = clientId < senderId;
+        const offerCollision = peerConnection.signalingState !== "stable";
+        
+        if (offerCollision && !polite) {
+            console.warn("Glare: Impolite peer ignoring remote offer.");
             return;
         }
+        
+        console.log("Glare/Reset: Yielding or resetting PC.");
+        peerConnection.close();
+        peerConnection = null;
     }
     
     if (!peerConnection) {
