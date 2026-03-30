@@ -207,6 +207,7 @@ function disconnectCall() {
         peerConnection.close();
         peerConnection = null;
     }
+    iceCandidateQueue = [];
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
@@ -310,6 +311,7 @@ function connect(roomId) {
 // ============== WEBRTC LOGIC ==============
 
 async function setupPeerConnection() {
+    iceCandidateQueue = [];
     peerConnection = new RTCPeerConnection(servers);
 
     peerConnection.onicecandidate = (event) => {
