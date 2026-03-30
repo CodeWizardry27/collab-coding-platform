@@ -19,21 +19,10 @@ const servers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        {
-            urls: "turn:openrelay.metered.ca:80",
-            username: "openrelayproject",
-            credential: "openrelayproject"
-        },
-        {
-            urls: "turn:openrelay.metered.ca:443",
-            username: "openrelayproject",
-            credential: "openrelayproject"
-        },
-        {
-            urls: "turn:openrelay.metered.ca:443?transport=tcp",
-            username: "openrelayproject",
-            credential: "openrelayproject"
-        }
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' }
     ]
 };
 
@@ -291,7 +280,7 @@ function connect(roomId) {
             } else if (payload.type === 'CLEAR') {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             } else if (payload.type === 'OFFER') {
-                await handleReceiveOffer(payload.rtcPayload);
+                await handleReceiveOffer(payload.rtcPayload, payload.senderId);
             } else if (payload.type === 'ANSWER') {
                 await handleReceiveAnswer(payload.rtcPayload);
             } else if (payload.type === 'ICE') {
@@ -313,6 +302,14 @@ async function setupPeerConnection() {
 
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) sendStompMessage({ type: 'ICE', rtcPayload: event.candidate });
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log("ICE Connection State:", peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+            videoPlaceholder.style.display = 'flex';
+            videoPlaceholder.querySelector('p').innerHTML = "❌ <b>Connection Failed</b><br>Check firewalls/NAT limits.";
+        }
     };
 
     peerConnection.ontrack = (event) => {
@@ -383,10 +380,17 @@ async function startVideoCall() {
     }
 }
 
-async function handleReceiveOffer(offer) {
+async function handleReceiveOffer(offer, senderId) {
     if (peerConnection) {
-        console.warn("Glare: Received offer but we already have a peerConnection active. Ignoring to prevent crash.");
-        return;
+        if (clientId < senderId) {
+            console.log("Glare: Yielding to remote offer. Recreating PC.");
+            peerConnection.close();
+            peerConnection = null;
+            await setupPeerConnection();
+        } else {
+            console.warn("Glare: Ignoring remote offer, waiting for them to yield.");
+            return;
+        }
     }
     
     if (!peerConnection) {

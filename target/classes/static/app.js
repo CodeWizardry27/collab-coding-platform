@@ -1,5 +1,6 @@
 // Configuration
-const API_BASE = 'http://localhost:8080';
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const API_BASE = isLocalhost ? 'http://localhost:8080' : window.location.origin;
 const WS_ENDPOINT = `${API_BASE}/ws`;
 
 // Generate random UUID for this client
@@ -13,10 +14,15 @@ let isApplyingRemoteChange = false;
 // WebRTC variables
 let localStream;
 let peerConnection;
+let iceCandidateQueue = [];
 const servers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' }
     ]
 };
 
@@ -37,6 +43,9 @@ const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 const startCallBtn = document.getElementById('start-call-btn');
 const videoPlaceholder = document.getElementById('video-placeholder');
+const callControls = document.getElementById('call-controls');
+const toggleMicBtn = document.getElementById('toggle-mic-btn');
+const toggleCamBtn = document.getElementById('toggle-cam-btn');
 
 // Whiteboard Elements
 const canvas = document.getElementById('whiteboard');
@@ -204,6 +213,8 @@ function disconnectCall() {
         localStream = null;
     }
     localVideo.srcObject = null;
+    localVideo.style.display = 'none';
+    callControls.style.display = 'none';
     remoteVideo.srcObject = null;
     videoPlaceholder.style.display = 'flex';
     videoPlaceholder.querySelector('p').textContent = "Join a room to Call";
@@ -269,7 +280,7 @@ function connect(roomId) {
             } else if (payload.type === 'CLEAR') {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             } else if (payload.type === 'OFFER') {
-                await handleReceiveOffer(payload.rtcPayload);
+                await handleReceiveOffer(payload.rtcPayload, payload.senderId);
             } else if (payload.type === 'ANSWER') {
                 await handleReceiveAnswer(payload.rtcPayload);
             } else if (payload.type === 'ICE') {
@@ -293,10 +304,34 @@ async function setupPeerConnection() {
         if (event.candidate) sendStompMessage({ type: 'ICE', rtcPayload: event.candidate });
     };
 
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log("ICE Connection State:", peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+            videoPlaceholder.style.display = 'flex';
+            videoPlaceholder.querySelector('p').innerHTML = "❌ <b>Connection Failed</b><br>Check firewalls/NAT limits.";
+        }
+    };
+
     peerConnection.ontrack = (event) => {
         if (event.streams && event.streams[0]) {
             remoteVideo.srcObject = event.streams[0];
             videoPlaceholder.style.display = 'none';
+
+            // Catch strict Browser Autoplay Policies (Chrome/Mobile Safari) blocking the remote video
+            setTimeout(() => {
+                remoteVideo.play().catch(e => {
+                    console.warn("🔐 Browser blocked background Autoplay. Waiting for user interaction.", e);
+                    videoPlaceholder.style.display = 'flex';
+                    videoPlaceholder.querySelector('p').innerHTML = "🔒 <b>Browser Secured</b><br>Click anywhere on the screen to view remote video!";
+                    
+                    const unblockPlay = () => {
+                        remoteVideo.play().then(() => {
+                            videoPlaceholder.style.display = 'none';
+                        }).catch(err => console.log('Still blocked', err));
+                    };
+                    document.body.addEventListener('click', unblockPlay, { once: true });
+                });
+            }, 100);
         }
     };
 
@@ -307,13 +342,27 @@ async function setupPeerConnection() {
     }
 }
 
+function flushIceQueue() {
+    while (iceCandidateQueue.length > 0) {
+        const c = iceCandidateQueue.shift();
+        peerConnection.addIceCandidate(new RTCIceCandidate(c)).catch(e => console.error("ICE error", e));
+    }
+}
+
 async function startVideoCall() {
     try {
         startCallBtn.disabled = true;
         startCallBtn.textContent = 'Starting...';
         
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = localStream;
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+            localVideo.style.display = 'block';
+            callControls.style.display = 'flex';
+        } catch (mediaErr) {
+            console.warn("Could not access camera/mic (starting receive-only):", mediaErr);
+        }
+        
         videoPlaceholder.querySelector('p').textContent = "Waiting for peer...";
 
         await setupPeerConnection();
@@ -328,20 +377,39 @@ async function startVideoCall() {
         console.error("Error starting call:", err);
         startCallBtn.disabled = false;
         startCallBtn.textContent = 'Start Call Error';
-        alert("Could not access camera/microphone.");
     }
 }
 
-async function handleReceiveOffer(offer) {
+async function handleReceiveOffer(offer, senderId) {
+    if (peerConnection) {
+        if (clientId < senderId) {
+            console.log("Glare: Yielding to remote offer. Recreating PC.");
+            peerConnection.close();
+            peerConnection = null;
+            await setupPeerConnection();
+        } else {
+            console.warn("Glare: Ignoring remote offer, waiting for them to yield.");
+            return;
+        }
+    }
+    
     if (!peerConnection) {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = localStream;
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+            localVideo.style.display = 'block';
+            callControls.style.display = 'flex';
+        } catch(mediaErr) {
+            console.warn("No camera/mic available. Joining receive-only.");
+        }
         await setupPeerConnection();
         startCallBtn.disabled = true;
         startCallBtn.textContent = 'Call Active';
     }
     
     await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    flushIceQueue();
+    
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     
@@ -351,10 +419,14 @@ async function handleReceiveOffer(offer) {
 async function handleReceiveAnswer(answer) {
     if (!peerConnection) return;
     await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    flushIceQueue();
 }
 
 async function handleReceiveIceCandidate(candidate) {
-    if (!peerConnection) return;
+    if (!peerConnection || !peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
+        iceCandidateQueue.push(candidate);
+        return;
+    }
     try {
         await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (e) {
@@ -363,6 +435,26 @@ async function handleReceiveIceCandidate(candidate) {
 }
 
 // ============== UI Listeners ==============
+
+let micEnabled = true;
+let camEnabled = true;
+
+toggleMicBtn.addEventListener('click', () => {
+    if (localStream && localStream.getAudioTracks().length > 0) {
+        micEnabled = !micEnabled;
+        localStream.getAudioTracks()[0].enabled = micEnabled;
+        toggleMicBtn.style.background = micEnabled ? 'rgba(13, 17, 23, 0.8)' : 'var(--error)';
+    }
+});
+
+toggleCamBtn.addEventListener('click', () => {
+    if (localStream && localStream.getVideoTracks().length > 0) {
+        camEnabled = !camEnabled;
+        localStream.getVideoTracks()[0].enabled = camEnabled;
+        toggleCamBtn.style.background = camEnabled ? 'rgba(13, 17, 23, 0.8)' : 'var(--error)';
+        localVideo.style.opacity = camEnabled ? '1' : '0.2';
+    }
+});
 
 tabCode.addEventListener('click', () => {
     tabCode.classList.add('active'); tabDraw.classList.remove('active');
